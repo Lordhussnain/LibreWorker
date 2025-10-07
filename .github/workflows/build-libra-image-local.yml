@@ -1,0 +1,70 @@
+name: Build Libra Image and Save as Tar
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20 and pnpm
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Enable pnpm (via corepack)
+        run: |
+          corepack enable
+          corepack prepare pnpm@latest --activate
+          pnpm -v
+
+      - name: Generate package.json + pnpm-lock.yaml
+        run: |
+          # Initialize a package.json (if missing)
+          pnpm init -y
+          node -e "const p=require('./package.json');p.name='libra-worker';p.version='1.0.0';p.type='module';p.main='worker.js';delete p.description;require('fs').writeFileSync('package.json',JSON.stringify(p,null,2))"
+
+          # Add dependencies required by worker.js
+          pnpm add --save \
+            bullmq \
+            ioredis \
+            @aws-sdk/client-s3 \
+            fs-extra \
+            tmp-promise \
+            node-fetch@3 \
+            pino
+
+          # Confirm files created
+          echo "Generated package.json and pnpm-lock.yaml:"
+          ls -l package.json pnpm-lock.yaml
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Build Docker image
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          echo "Building Docker image myorg/libra:${IMAGE_TAG}"
+          DOCKER_BUILDKIT=1 docker build \
+            -t myorg/libra:${IMAGE_TAG} .
+
+      - name: Save Docker image as TAR
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          mkdir -p output
+          TAR_PATH="output/libra-${IMAGE_TAG}.tar"
+          docker save myorg/libra:${IMAGE_TAG} -o "$TAR_PATH"
+          ls -lh "$TAR_PATH"
+
+      - name: Upload TAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libra-tar
+          path: output/
