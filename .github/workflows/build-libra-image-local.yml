@@ -11,25 +11,39 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Node.js 20 and pnpm
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          # optional: you can enable cache for pnpm store if you want,
+          # but this does NOT install pnpm itself.
           cache: "pnpm"
 
-      - name: Enable pnpm (via corepack)
+      - name: Enable corepack and activate pnpm (ensure pnpm executable exists)
         run: |
+          # Enable corepack (ships with Node 16.13+/Node 20)
           corepack enable
+
+          # Activate the latest pnpm and put it on PATH
           corepack prepare pnpm@latest --activate
+
+          # Sanity checks
+          echo "node: $(node --version)"
+          echo "npm: $(npm --version)"
+          which pnpm || true
           pnpm -v
 
       - name: Generate package.json + pnpm-lock.yaml
         run: |
-          # Initialize a package.json (if missing)
-          pnpm init -y
-          node -e "const p=require('./package.json');p.name='libra-worker';p.version='1.0.0';p.type='module';p.main='worker.js';delete p.description;require('fs').writeFileSync('package.json',JSON.stringify(p,null,2))"
+          # If repo already had package.json you can skip init; we handle both cases
+          if [ ! -f package.json ]; then
+            pnpm init -y
+          fi
 
-          # Add dependencies required by worker.js
+          # Tune package.json for ESM worker
+          node -e "const p=require('./package.json'); p.name='libra-worker'; p.version='1.0.0'; p.type='module'; p.main='worker.js'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2))"
+
+          # Add runtime dependencies used by your worker.js
           pnpm add --save \
             bullmq \
             ioredis \
@@ -40,8 +54,9 @@ jobs:
             pino
 
           # Confirm files created
-          echo "Generated package.json and pnpm-lock.yaml:"
-          ls -l package.json pnpm-lock.yaml
+          echo "package.json:"
+          cat package.json
+          echo "pnpm-lock.yaml exists?"; ls -la pnpm-lock.yaml
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
@@ -51,8 +66,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           echo "Building Docker image myorg/libra:${IMAGE_TAG}"
-          DOCKER_BUILDKIT=1 docker build \
-            -t myorg/libra:${IMAGE_TAG} .
+          DOCKER_BUILDKIT=1 docker build -t myorg/libra:${IMAGE_TAG} .
 
       - name: Save Docker image as TAR
         env:
