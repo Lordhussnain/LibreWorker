@@ -15,35 +15,48 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # optional: you can enable cache for pnpm store if you want,
-          # but this does NOT install pnpm itself.
-          cache: "pnpm"
+          # NOTE: do NOT set cache: "pnpm" here — that tries to call pnpm before it's installed.
+          # If you want caching for other package managers you can use cache: "npm" or "yarn".
 
-      - name: Enable corepack and activate pnpm (ensure pnpm executable exists)
+      - name: Ensure pnpm is available (corepack + fallback)
         run: |
-          # Enable corepack (ships with Node 16.13+/Node 20)
-          corepack enable
+          set -e
+          echo "Enabling corepack..."
+          corepack enable || echo "corepack enable failed (will try fallback)"
+          echo "Activating pnpm via corepack..."
+          corepack prepare pnpm@latest --activate || echo "corepack prepare failed (will try npm global install)"
 
-          # Activate the latest pnpm and put it on PATH
-          corepack prepare pnpm@latest --activate
+          # Fallback: if pnpm still missing, install globally via npm
+          if ! command -v pnpm >/dev/null 2>&1; then
+            echo "pnpm not found, installing pnpm globally as fallback..."
+            npm install -g pnpm@latest
+          fi
 
-          # Sanity checks
-          echo "node: $(node --version)"
-          echo "npm: $(npm --version)"
+          echo "pnpm location and version:"
           which pnpm || true
           pnpm -v
 
+      # Optional: cache pnpm store (enable if you want)
+      # - name: Cache pnpm store
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: ~/.pnpm-store
+      #     key: pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+      #     restore-keys: |
+      #       pnpm-store-${{ runner.os }}-
+
       - name: Generate package.json + pnpm-lock.yaml
         run: |
-          # If repo already had package.json you can skip init; we handle both cases
+          set -e
+          # create package.json if missing
           if [ ! -f package.json ]; then
             pnpm init -y
           fi
 
-          # Tune package.json for ESM worker
-          node -e "const p=require('./package.json'); p.name='libra-worker'; p.version='1.0.0'; p.type='module'; p.main='worker.js'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2))"
+          # tune for ESM worker
+          node -e "const p=require('./package.json'); p.name='libra-worker'; p.version='1.0.0'; p.type='module'; p.main='worker.js'; require('fs').writeFileSync('package.json', JSON.stringify(p,null,2))"
 
-          # Add runtime dependencies used by your worker.js
+          # install runtime deps used by worker.js
           pnpm add --save \
             bullmq \
             ioredis \
@@ -53,7 +66,6 @@ jobs:
             node-fetch@3 \
             pino
 
-          # Confirm files created
           echo "package.json:"
           cat package.json
           echo "pnpm-lock.yaml exists?"; ls -la pnpm-lock.yaml
@@ -65,6 +77,7 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -e
           echo "Building Docker image myorg/libra:${IMAGE_TAG}"
           DOCKER_BUILDKIT=1 docker build -t myorg/libra:${IMAGE_TAG} .
 
@@ -72,6 +85,7 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
         run: |
+          set -e
           mkdir -p output
           TAR_PATH="output/libra-${IMAGE_TAG}.tar"
           docker save myorg/libra:${IMAGE_TAG} -o "$TAR_PATH"
