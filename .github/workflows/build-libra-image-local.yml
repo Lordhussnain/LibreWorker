@@ -15,8 +15,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          # NOTE: do NOT set cache: "pnpm" here — that tries to call pnpm before it's installed.
-          # If you want caching for other package managers you can use cache: "npm" or "yarn".
 
       - name: Ensure pnpm is available (corepack + fallback)
         run: |
@@ -36,27 +34,13 @@ jobs:
           which pnpm || true
           pnpm -v
 
-      # Optional: cache pnpm store (enable if you want)
-      # - name: Cache pnpm store
-      #   uses: actions/cache@v4
-      #   with:
-      #     path: ~/.pnpm-store
-      #     key: pnpm-store-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
-      #     restore-keys: |
-      #       pnpm-store-${{ runner.os }}-
-
-      - name: Generate package.json + pnpm-lock.yaml
+      - name: Generate package.json + pnpm-lock.yaml (robust, CI-safe)
         run: |
           set -e
-          # create package.json if missing
-          if [ ! -f package.json ]; then
-            pnpm init -y
-          fi
+          # Create a minimal package.json deterministically (avoids differences in pnpm init flags)
+          node -e "const fs=require('fs'); const p={name:'libra-worker',version:'1.0.0',type:'module',main:'worker.js'}; fs.writeFileSync('package.json', JSON.stringify(p,null,2)); console.log('wrote package.json')"
 
-          # tune for ESM worker
-          node -e "const p=require('./package.json'); p.name='libra-worker'; p.version='1.0.0'; p.type='module'; p.main='worker.js'; require('fs').writeFileSync('package.json', JSON.stringify(p,null,2))"
-
-          # install runtime deps used by worker.js
+          # Install runtime deps used by worker.js
           pnpm add --save \
             bullmq \
             ioredis \
